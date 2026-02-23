@@ -10,18 +10,11 @@ let imageIds: string[] = []
 
 export function getImageIds() { return imageIds }
 
-// The 10 LIDC-IDRI studies available in /data/
+// The 3 LIDC-IDRI studies included in this repository
 export const LIDC_STUDIES = [
   { id: 'LIDC-IDRI-0001', slices: 133, xml: '069.xml' },
   { id: 'LIDC-IDRI-0002', slices: 261, xml: '071.xml' },
   { id: 'LIDC-IDRI-0003', slices: 140, xml: '072.xml' },
-  { id: 'LIDC-IDRI-0004', slices: 241, xml: '074.xml' },
-  { id: 'LIDC-IDRI-0005', slices: 133, xml: '076.xml' },
-  { id: 'LIDC-IDRI-0006', slices: 133, xml: '078.xml' },
-  { id: 'LIDC-IDRI-0007', slices: 145, xml: '081.xml' },
-  { id: 'LIDC-IDRI-0008', slices: 133, xml: '082.xml' },
-  { id: 'LIDC-IDRI-0009', slices: 256, xml: '085.xml' },
-  { id: 'LIDC-IDRI-0010', slices: 277, xml: '086.xml' },
 ]
 
 // Load a LIDC study by case ID (e.g. 'LIDC-IDRI-0001').

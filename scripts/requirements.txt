@@ -1,0 +1,31 @@
+# Python dependencies for hackathon scripts
+#
+# Install into a fresh virtual environment:
+#
+#   python -m venv .venv
+#   source .venv/bin/activate      # Linux/macOS
+#   # .venv\Scripts\activate       # Windows
+#   pip install -r scripts/requirements.txt
+#
+# TotalSegmentator requires PyTorch.  Install the CPU-only build first
+# (much smaller download) unless you have a CUDA GPU:
+#
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+#
+# Then install the remaining packages:
+#
+#   pip install -r scripts/requirements.txt
+
+# ── AI segmentation ──────────────────────────────────────────────────────────
+TotalSegmentator>=2.0.0   # lung_nodules task; accepts DICOM dirs directly
+
+# ── DICOM SEG generation (lidc_xml_to_seg.py) ───────────────────────────────
+pydicom>=2.3
+highdicom>=0.19
+scikit-image>=0.19
+numpy>=1.23
+
+# ── Segmentation API server (segment_server.py) ──────────────────────────────
+fastapi>=0.100
+uvicorn[standard]>=0.22
+pydantic>=2.0

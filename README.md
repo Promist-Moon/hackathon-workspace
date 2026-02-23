@@ -54,13 +54,15 @@ hackathon-workspace/
 │   │   └── loader.ts        # DICOM loading + LIDC_STUDIES metadata + loadStudy()
 │   └── styles.css           # Application styles
 ├── data/
-│   └── LIDC-IDRI-XXXX/      # 10 patient cases (0001–0010)
+│   └── LIDC-IDRI-000X/      # 3 patient cases included (0001–0003)
 │       ├── ct/              # CT DICOM slices (1-001.dcm … 1-NNN.dcm)
 │       └── annotations/     # XML + pre-computed DICOM SEG files
 ├── scripts/
-│   ├── dicom_to_nifti.py    # Convert DICOM → NIfTI for AI models
-│   ├── run_totalsegmentator.py  # Run TotalSegmentator on a NIfTI file
-│   └── parse_lidc_xml.py    # Parse LIDC XML (reference/study)
+│   ├── run_totalsegmentator.py  # Run TotalSegmentator on a DICOM CT dir → DICOM SEG
+│   ├── lidc_xml_to_seg.py       # Convert LIDC annotation XML → DICOM SEG
+│   ├── parse_lidc_xml.py        # Parse LIDC XML (reference/study for Task 2)
+│   ├── segment_server.py        # FastAPI server wrapping TotalSegmentator (Task 3 / Bonus A)
+│   └── requirements.txt         # Python dependencies for all scripts
 ├── public/
 │   └── data/                # Symlink → ../data (served at /data/ by Vite)
 ├── index.html               # Vite HTML entry
@@ -108,32 +110,56 @@ Exports you will need:
 
 | Export | Description |
 |--------|-------------|
-| `LIDC_STUDIES` | Array of `{ id, slices, xml }` for all 10 cases |
+| `LIDC_STUDIES` | Array of `{ id, slices, xml }` for all 3 cases |
 | `loadStudy(caseId, onProgress?)` | Loads CT slices for a given case ID into the viewer |
 | `loadDicomFiles(files, onProgress?)` | Loads File objects into the viewer |
 | `getImageIds()` | Returns the currently loaded image ID array |
 
 ## Data Files
 
-All data is served under `/data/` at runtime (via the `public/data` symlink).
+Three LIDC-IDRI cases are included in the repository. All data is served under `/data/` at runtime (via the `public/data` symlink).
 
 ### CT Slices
 ```
-/data/LIDC-IDRI-XXXX/ct/1-001.dcm  …  1-NNN.dcm
+/data/LIDC-IDRI-000X/ct/1-001.dcm  …  1-NNN.dcm
 ```
 
 ### Ground Truth XML
 ```
-/data/LIDC-IDRI-XXXX/annotations/<xml-file>.xml
+/data/LIDC-IDRI-000X/annotations/<xml-file>.xml
 ```
 
 ### Pre-computed Segmentations (DICOM SEG)
 ```
-/data/LIDC-IDRI-XXXX/annotations/LIDC-IDRI-XXXX_Combined_SEG.dcm        ← LIDC nodule masks
-/data/LIDC-IDRI-XXXX/annotations/LIDC-IDRI-XXXX_lung_nodules_seg.dcm    ← TotalSegmentator output
+/data/LIDC-IDRI-000X/annotations/LIDC-IDRI-000X_Combined_SEG.dcm        ← LIDC nodule masks (from XML)
+/data/LIDC-IDRI-000X/annotations/LIDC-IDRI-000X_lung_nodules_seg.dcm    ← TotalSegmentator output
 ```
 
-See `data/README.md` for the full case list with slice counts and XML filenames.
+See `data/README.md` for the case list with slice counts and XML filenames.
+
+## Python Environment (Task 3 / Bonus A)
+
+Set up a self-contained virtual environment using the provided requirements file:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate          # Linux/macOS
+# .venv\Scripts\activate           # Windows
+
+# Install PyTorch first (CPU-only build is much smaller):
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+
+# Install remaining script dependencies:
+pip install -r scripts/requirements.txt
+```
+
+Then start the segmentation API server:
+
+```bash
+python scripts/segment_server.py   # starts on http://localhost:8000
+```
+
+See `HACKATHON_TASKS.md § Task 3` for the full pipeline walkthrough.
 
 ## Useful References
 
@@ -169,3 +195,12 @@ Make sure you're accessing via `http://localhost:3000`, not `file://`
 
 ### Segmentation overlay doesn't appear on the right slices
 The coordinate systems between DICOM pixel space, canvas space, and world space are different. See `HACKATHON_TASKS.md` hints and the Cornerstone3D docs on `utilities.imageToWorldCoords`.
+
+### Script errors — missing Python packages
+Set up the virtual environment first:
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+pip install -r scripts/requirements.txt
+```

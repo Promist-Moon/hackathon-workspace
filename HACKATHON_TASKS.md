@@ -88,47 +88,93 @@ You have a working DICOM viewer built with Cornerstone3D. Your mission is to imp
 
 ### What to build
 
-Run either **TotalSegmentator** or **MONAI Label** on the CT data in `data/<activeStudy>/ct/` and produce a segmentation file that Task 4 can display. How you connect the frontend to the Python model is up to you.
+Run **TotalSegmentator** on the CT data in `data/<activeStudy>/ct/` and produce a DICOM SEG file that Task 4 can display. How you connect the frontend to the Python backend is up to you.
 
 ### Approach is open-ended
 
 There is no single correct solution. Some options:
 
-- Build a small Python HTTP server (Flask/FastAPI) that wraps the provided scripts and have the button POST to it
-- Call `scripts/dicom_to_nifti.py` + a segmentation model via a Node subprocess from a local script
-- Implement a "poll for results" UI that checks for a new file and loads it when it appears
-- A drag-and-drop fallback that accepts a segmentation file the user ran manually
+- Start `scripts/segment_server.py` (a FastAPI server already provided) and have the button POST to its `/segment` endpoint
+- Run the pipeline manually in a terminal and implement a "poll for results" UI that detects when the output file appears
+- Implement a drag-and-drop fallback that accepts a segmentation file the user pre-generated
 
 Any working progress toward automation earns credit.
 
 ### Scripts available
 
-- `scripts/dicom_to_nifti.py` — converts DICOM slices to NIfTI (input for AI models)
-- `scripts/run_totalsegmentator.py` — runs TotalSegmentator (`lung_nodules` task) on a NIfTI file, outputs a NIfTI segmentation
-- `scripts/nifti_to_dicom_seg.py` — converts a NIfTI segmentation to DICOM SEG (required for Task 4 to load the result)
+- `scripts/run_totalsegmentator.py` — runs TotalSegmentator (`lung_nodules` task) directly on the CT DICOM directory, outputs a DICOM SEG file in one step
+- `scripts/lidc_xml_to_seg.py` — converts LIDC annotation XML → DICOM SEG (this is how the pre-computed `_Combined_SEG.dcm` files were generated)
+- `scripts/segment_server.py` — FastAPI server that wraps `run_totalsegmentator.py` behind a `POST /segment` endpoint
+- `scripts/requirements.txt` — Python dependency list for all of the above
 
-The full pipeline is:
+The TotalSegmentator pipeline is a **single step** — it accepts a DICOM directory as input and emits a DICOM SEG directly:
+
 ```
-DICOM slices → NIfTI          (dicom_to_nifti.py)
-NIfTI → segmentation NIfTI   (run_totalsegmentator.py)
-segmentation NIfTI → DICOM SEG  (nifti_to_dicom_seg.py)
-DICOM SEG → displayed overlay  (Task 4)
+CT DICOM directory  →  TotalSegmentator  →  DICOM SEG output
 ```
 
-### Models
+### Python setup
 
-| Model | Install | Speed (CPU) | Notes |
-|-------|---------|-------------|-------|
-| **TotalSegmentator** | `pip install TotalSegmentator` | ~10 min (`--fast` mode) | `run_totalsegmentator.py` hard-codes `lung_nodules` task |
-| **MONAI Label** | `pip install monailabel` | Variable | Server-based; more setup required |
+Set up a Python virtual environment from the provided requirements file:
 
-Pre-computed results are available in `data/<activeStudy>/annotations/` if you want Task 4 to work even if Task 3 is incomplete.
+```bash
+python -m venv .venv
+source .venv/bin/activate          # Linux/macOS
+# .venv\Scripts\activate           # Windows
+
+# Install PyTorch (CPU-only build is much smaller):
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+
+# Install remaining dependencies:
+pip install -r scripts/requirements.txt
+```
+
+### Running the pipeline manually
+
+```bash
+source .venv/bin/activate
+
+python scripts/run_totalsegmentator.py \
+    data/LIDC-IDRI-0001/ct \
+    data/LIDC-IDRI-0001/annotations/LIDC-IDRI-0001_lung_nodules_seg.dcm \
+    --fast
+```
+
+`--fast` uses lower resolution and is roughly 3× faster on CPU with minimal quality loss.
+
+### Running the segmentation API server
+
+```bash
+source .venv/bin/activate
+python scripts/segment_server.py
+```
+
+The server starts on `http://localhost:8000`. Test it:
+
+```bash
+curl -s -X POST http://localhost:8000/segment \
+     -H "Content-Type: application/json" \
+     -d '{"case_id": "LIDC-IDRI-0001"}'
+# → {"seg_path": "data/LIDC-IDRI-0001/annotations/LIDC-IDRI-0001_lung_nodules_seg.dcm", "status": "ok"}
+```
+
+If the DICOM SEG already exists, it is returned immediately without re-running the model — use this during frontend integration development so you don't have to wait.
+
+### Model timing (CPU)
+
+| Mode | Approximate time |
+|------|-----------------|
+| `--fast` | ~5–10 min |
+| Full resolution | ~15–30 min |
+
+Pre-computed results are already in `data/<activeStudy>/annotations/` — use them for Task 4 if you want to skip the wait.
 
 ### Hints
 
-- The pipeline is: DICOM slices → NIfTI → AI model → segmentation output → DICOM SEG (or NIfTI)
-- Think about how the frontend knows when the model is done. Polling? WebSocket? Manual trigger?
-- The frontend needs to obtain the result file path or blob to pass to Task 4.
+- The key design question is: how does the frontend know when the model is done? Polling? Promise? Manual trigger?
+- `segment_server.py` returns the pre-computed file immediately if it already exists, so frontend integration testing is fast even without running the model
+- The `seg_path` returned by the server is relative to the workspace root; prepend `/` to use it as a browser URL
+- Think about error handling: what should the UI show if the server is not running?
 
 ### What to include in your report
 
@@ -185,22 +231,27 @@ data/LIDC-IDRI-0001/annotations/LIDC-IDRI-0001_Combined_SEG.dcm       ← LIDC n
 
 ### API contract
 
-The API server is at `http://localhost:8000`. It exposes:
+`scripts/segment_server.py` provides this API at `http://localhost:8000`:
 
 ```
+GET  /health
+     → { "status": "ok" }
+
 POST /segment
-Body: { "case_id": "LIDC-IDRI-0001" }
-Response: { "seg_path": "data/LIDC-IDRI-0001/annotations/LIDC-IDRI-0001_lung_nodules_seg.dcm" }
+     Body: { "case_id": "LIDC-IDRI-0001" }
+     Response: { "seg_path": "data/LIDC-IDRI-0001/annotations/LIDC-IDRI-0001_lung_nodules_seg.dcm",
+                 "status": "ok" }
 ```
 
-You are responsible for building this server (a minimal Flask or FastAPI wrapper around `scripts/run_totalsegmentator.py` is sufficient). If the server is not running, the button should fail gracefully.
+Start the server before testing (see Task 3 for setup instructions).
 
 ### Hints
 
 - This bonus builds on Task 4 — get the overlay display working first, then wire up the API call
+- The server returns the pre-computed file immediately if the segmentation already exists — use this during development so you don't have to wait for the model
 - Think carefully about UX: the model may take minutes on CPU. How will the user know it's running?
-- The server can return the pre-computed file immediately if you want to focus on the frontend integration
 - Consider disabling the button while a request is in flight to prevent duplicate submissions
+- The `seg_path` returned by the server is relative to the workspace root; prefix it with `/` to form a URL the browser can fetch (e.g. `/data/LIDC-IDRI-0001/annotations/…`)
 
 ### What to include in your report
 

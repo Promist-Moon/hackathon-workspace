@@ -4,14 +4,17 @@ dist/
 *.local
 .env
 
-# Data: DICOM files are large — exclude from git, download separately
+# Data: DICOM files are large — only the first 3 cases are included in the repo
 data/LIDC-IDRI-*/
 data/sample_dicom/
 data/sample_annotations/
 
-# Keep data docs
+# Keep data docs and the 3 included cases
 !data/README.md
 !data/DOWNLOAD.md
-!data/LIDC-IDRI-0001
-!data/LIDC-IDRI-0002
-!data/LIDC-IDRI-0003
+!data/LIDC-IDRI-0001/
+!data/LIDC-IDRI-0001/**
+!data/LIDC-IDRI-0002/
+!data/LIDC-IDRI-0002/**
+!data/LIDC-IDRI-0003/
+!data/LIDC-IDRI-0003/**
