@@ -294,13 +294,14 @@ One well-implemented, genuinely useful feature scores higher than five half-fini
 
 When time is up (18:00):
 
-1. Commit your code:
+1. Commit and push to **your fork**:
    ```bash
    git add .
    git commit -m "Hackathon submission"
    git push
    ```
-2. **Grant repo access** to `atomorphic@gmail.com` (Settings → Collaborators)
+   > If you haven't forked yet: go to [github.com/atomorphic/hackathon-workspace](https://github.com/atomorphic/hackathon-workspace), click **Fork**, then clone your fork.
+2. **Grant repo access** to `atomorphic@gmail.com` on your fork (Settings → Collaborators)
 3. **Email** `team@atomorphic.ai` with your GitHub repo link and confirmation that access is granted
 4. **Write your report** (18:00–18:30) using `REPORT_TEMPLATE.md`
 

@@ -4,9 +4,13 @@ Welcome to the Atomorphic Mini Hackathon! This workspace contains a working DICO
 
 ## Quick Start
 
+> **Fork first — do not clone directly.** If you clone the shared repo you won't be able to push your changes.
+>
+> Go to [github.com/atomorphic/hackathon-workspace](https://github.com/atomorphic/hackathon-workspace) and click **Fork** (top-right). Then clone **your fork**:
+
 ```bash
-# Clone the workspace
-git clone https://github.com/atomorphic/hackathon-workspace.git
+# Clone your fork (replace <your-username>)
+git clone https://github.com/<your-username>/hackathon-workspace.git
 cd hackathon-workspace
 
 # Install dependencies
