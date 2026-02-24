@@ -312,7 +312,6 @@ When time is up (18:00):
 We evaluate overall performance holistically — there is no fixed point allocation visible to you. We look at:
 
 - **Functionality** — does it work?
-- **Code quality** — is it clean and well-structured?
 - **Understanding** — can you explain your decisions? (this is probed in the follow-up interview)
 - **AI agility** — did you use AI tools effectively while maintaining your own understanding?
 
