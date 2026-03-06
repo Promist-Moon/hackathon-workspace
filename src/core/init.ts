@@ -33,6 +33,7 @@ export const TOOLGROUP_ID = 'hackathonToolGroup'
 let renderingEngine: RenderingEngine
 let toolGroup: ToolTypes.IToolGroup
 let initialised = false
+let initPromise: Promise<void> | null = null
 
 export function getRenderingEngine() { return renderingEngine }
 export function getToolGroup()       { return toolGroup }
@@ -40,10 +41,15 @@ export function getToolGroup()       { return toolGroup }
 // ─── Initialise all three Cornerstone3D packages ─────────────────────────────
 export async function initCornerstone() {
   if (initialised) return
-  await coreInit()
-  await dicomLoader.init()
-  await toolsInit()
-  initialised = true
+  if (!initPromise) {
+    initPromise = (async () => {
+      await coreInit()
+      await dicomLoader.init()
+      await toolsInit()
+      initialised = true
+    })().finally(() => { initPromise = null })
+  }
+  await initPromise
 }
 
 // ─── Create the Stack viewport ───────────────────────────────────────────────

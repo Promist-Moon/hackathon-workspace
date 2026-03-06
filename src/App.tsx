@@ -38,7 +38,7 @@ import {
   PlanarFreehandROITool,
   annotation,
 } from '@cornerstonejs/tools'
-import { Enums as CoreEnums } from '@cornerstonejs/core'
+import { Enums as CoreEnums, metaData, utilities as coreUtils } from '@cornerstonejs/core'
 import { Enums as ToolEnums } from '@cornerstonejs/tools'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -233,10 +233,217 @@ export default function App() {
   // See HACKATHON_TASKS.md § Task 2 for hints.
   //
   const handleLoadGT = useCallback(async () => {
-    // TODO Task 2 — implement handleLoadGT()
-    console.warn('Task 2 not yet implemented')
-    setStatus('Task 2: Load Ground Truth — not yet implemented')
-  }, [activeStudy])
+    if (!ready) return
+    if (!activeStudy) {
+      setStatus('Select a study before loading GT')
+      return
+    }
+
+    const study = LIDC_STUDIES.find(s => s.id === activeStudy)
+    if (!study) {
+      setStatus(`Study metadata not found for ${activeStudy}`)
+      return
+    }
+
+    const imageIds = getImageIds()
+    if (imageIds.length === 0) {
+      setStatus('Load a study first before loading GT')
+      return
+    }
+
+    const re = getRenderingEngine()
+    if (!re || !viewportRef.current) {
+      setStatus('Viewport not ready')
+      return
+    }
+
+    const vp = re.getViewport(VIEWPORT_ID) as any
+    const viewRef = vp?.getViewReference?.() ?? {}
+    const GT_SOURCE = 'LIDC_GT_XML'
+
+    try {
+      setStatus(`Loading GT XML (${study.xml})…`)
+      const res = await fetch(`/data/${activeStudy}/annotations/${study.xml}`)
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`)
+      }
+
+      const xmlText = await res.text()
+      const xmlDoc = new DOMParser().parseFromString(xmlText, 'application/xml')
+      if (xmlDoc.querySelector('parsererror')) {
+        throw new Error('Invalid XML format')
+      }
+
+      const slices = imageIds
+        .map((imageId, index) => {
+          const plane = metaData.get('imagePlaneModule', imageId) as any
+          const sop = metaData.get('sopCommonModule', imageId) as any
+          const z = Number(plane?.imagePositionPatient?.[2])
+          return {
+            imageId,
+            index,
+            z: Number.isFinite(z) ? z : null,
+            sopUID: typeof sop?.sopInstanceUID === 'string' ? sop.sopInstanceUID.trim() : '',
+          }
+        })
+      const slicesWithZ = slices.filter(
+        (v): v is { imageId: string; index: number; z: number; sopUID: string } => v.z !== null
+      )
+      const slicesBySopUID = new Map<string, { imageId: string; index: number; z: number | null; sopUID: string }>()
+      for (const s of slices) {
+        if (s.sopUID) slicesBySopUID.set(s.sopUID, s)
+      }
+
+      if (slicesWithZ.length === 0) {
+        throw new Error('Could not read slice Z metadata from loaded images')
+      }
+
+      const ns = 'http://www.nih.gov'
+      const roiNodes = Array.from(xmlDoc.getElementsByTagNameNS(ns, 'roi'))
+      const pendingContours: Array<{ imageId: string; index: number; worldPoints: [number, number, number][] }> = []
+
+      for (const roi of roiNodes) {
+        const inclusionText = roi.getElementsByTagNameNS(ns, 'inclusion')[0]?.textContent?.trim().toUpperCase()
+        if (inclusionText && inclusionText !== 'TRUE') continue
+
+        const roiSopUID = roi.getElementsByTagNameNS(ns, 'imageSOP_UID')[0]?.textContent?.trim() ?? ''
+        const zText = roi.getElementsByTagNameNS(ns, 'imageZposition')[0]?.textContent ?? ''
+        const roiZ = Number.parseFloat(zText)
+
+        let best = roiSopUID ? slicesBySopUID.get(roiSopUID) : undefined
+        if (!best) {
+          if (!Number.isFinite(roiZ)) continue
+          let bestByZ = slicesWithZ[0]
+          let bestDist = Math.abs(bestByZ.z - roiZ)
+          for (let i = 1; i < slicesWithZ.length; i++) {
+            const d = Math.abs(slicesWithZ[i].z - roiZ)
+            if (d < bestDist) {
+              bestByZ = slicesWithZ[i]
+              bestDist = d
+            }
+          }
+          best = bestByZ
+        }
+
+        const edgeNodes = Array.from(roi.getElementsByTagNameNS(ns, 'edgeMap'))
+        if (edgeNodes.length < 3) continue
+
+        const worldPoints = edgeNodes
+          .map(edge => {
+            const xText = edge.getElementsByTagNameNS(ns, 'xCoord')[0]?.textContent ?? ''
+            const yText = edge.getElementsByTagNameNS(ns, 'yCoord')[0]?.textContent ?? ''
+            const x = Number.parseFloat(xText)
+            const y = Number.parseFloat(yText)
+            if (!Number.isFinite(x) || !Number.isFinite(y)) return undefined
+            // imageToWorldCoords expects [row, col] = [y, x].
+            return coreUtils.imageToWorldCoords(best.imageId, [y, x])
+          })
+          .filter((p): p is [number, number, number] => Boolean(p))
+
+        if (worldPoints.length < 3) continue
+
+        pendingContours.push({
+          imageId: best.imageId,
+          index: best.index,
+          worldPoints,
+        })
+      }
+
+      if (pendingContours.length === 0) {
+        setStatus(`No drawable GT contours found in ${study.xml}`)
+        return
+      }
+
+      // Replace old GT overlays only after new contours are ready.
+      const existing = annotation.state.getAllAnnotations()
+      for (const a of existing) {
+        const isLegacyAutoGT =
+          a.autoGenerated &&
+          a.metadata?.toolName === PlanarFreehandROITool.toolName
+        const isTaggedGT =
+          a.metadata?.toolName === PlanarFreehandROITool.toolName &&
+          (a.metadata as any)?.annotationSource === GT_SOURCE
+
+        if ((isLegacyAutoGT || isTaggedGT) && a.annotationUID) {
+          annotation.state.removeAnnotation(a.annotationUID)
+        }
+      }
+
+      const contourStrengthBySlice = new Map<number, number>()
+      const addedBySlice = new Map<number, string[]>()
+
+      for (const contour of pendingContours) {
+        const uid = annotation.state.addAnnotation({
+          highlighted: false,
+          autoGenerated: true,
+          invalidated: false,
+          isLocked: false,
+          isVisible: true,
+          metadata: {
+            ...viewRef,
+            toolName: PlanarFreehandROITool.toolName,
+            referencedImageId: contour.imageId,
+            ...({ annotationSource: GT_SOURCE } as any),
+          },
+          data: {
+            handles: {
+              points: contour.worldPoints,
+              activeHandleIndex: null,
+            },
+            contour: {
+              polyline: contour.worldPoints,
+              closed: true,
+            },
+          },
+        }, viewportRef.current)
+
+        // Force high-contrast display for GT overlays.
+        annotation.config.style.setAnnotationStyles(uid, {
+          color: 'rgb(255, 255, 0)',
+          colorAutoGenerated: 'rgb(255, 255, 0)',
+          lineWidth: '3',
+          lineWidthAutoGenerated: '3',
+          textBoxColor: 'rgb(255, 255, 0)',
+          textBoxLinkLineColor: 'rgb(255, 255, 0)',
+          textbox: false,
+        } as any)
+
+        contourStrengthBySlice.set(
+          contour.index,
+          (contourStrengthBySlice.get(contour.index) ?? 0) + contour.worldPoints.length
+        )
+        const uids = addedBySlice.get(contour.index) ?? []
+        uids.push(uid)
+        addedBySlice.set(contour.index, uids)
+      }
+
+      const bestSlice = Array.from(contourStrengthBySlice.entries()).sort((a, b) => b[1] - a[1])[0]
+      if (bestSlice) {
+        const targetIndex = bestSlice[0]
+        await vp?.setImageIdIndex?.(targetIndex)
+        const firstUID = addedBySlice.get(targetIndex)?.[0]
+        if (firstUID) {
+          annotation.selection.deselectAnnotation()
+          annotation.selection.setAnnotationSelected(firstUID, true, false)
+        }
+      }
+
+      vp?.render?.()
+      const all = annotation.state.getAllAnnotations()
+      setAnnotations(all.map(a => ({ uid: a.annotationUID ?? '', type: a.metadata?.toolName ?? '' })))
+
+      if (bestSlice) {
+        const slice = bestSlice[0] + 1
+        setInfo(prev => ({ ...prev, slice: String(slice), total: String(imageIds.length) }))
+        setStatus(`Loaded GT: ${pendingContours.length} contour${pendingContours.length !== 1 ? 's' : ''} from ${study.xml}. Jumped to slice ${slice}`)
+        return
+      }
+
+      setStatus(`Loaded GT: ${pendingContours.length} contour${pendingContours.length !== 1 ? 's' : ''} from ${study.xml}`)
+    } catch (err) {
+      setStatus(`Failed to load GT: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }, [activeStudy, ready])
 
   // ---------------------------------------------------------------------------
   // TASK 3 — Run AI Segmentation Model
