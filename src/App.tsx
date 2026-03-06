@@ -205,10 +205,23 @@ export default function App() {
   // See HACKATHON_TASKS.md § Task 1 for hints.
   //
   const handleSelectStudy = useCallback(async (caseId: string) => {
-    // TODO Task 1 — implement handleSelectStudy()
-    console.warn('Task 1 not yet implemented')
-    setStatus('Task 1: Study Selector — not yet implemented')
-  }, [])
+    if (!ready) return
+
+    try {
+      setStatus(`Loading ${caseId}…`)
+      const n = await loadStudy(caseId, (loaded, total) =>
+        setStatus(`Loading ${caseId}… ${loaded}/${total}`)
+      )
+
+      setActiveStudy(caseId)
+      setAnnotations([])
+      setSegments([])
+      setInfo(prev => ({ ...prev, slice: String(Math.floor(n / 2) + 1), total: String(n) }))
+      setStatus(`Loaded ${caseId} (${n} slices)`)
+    } catch (err) {
+      setStatus(`Failed to load ${caseId}: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }, [ready])
 
   // ---------------------------------------------------------------------------
   // TASK 2 — Load Ground Truth Annotations
@@ -389,7 +402,17 @@ export default function App() {
           {/* ── TASK 1: Study Selector — implement handleSelectStudy() ── */}
           <h3 style={{ borderTop: '1px solid var(--border)' }}>Studies</h3>
           <div className="list-content">
-            <p className="empty">Task 1: implement study selector</p>
+            {LIDC_STUDIES.map(study => (
+              <button
+                key={study.id}
+                disabled={!ready}
+                className={`study-item ${activeStudy === study.id ? 'active' : ''}`}
+                onClick={() => handleSelectStudy(study.id)}
+              >
+                <span>{study.id}</span>
+                <span className="study-slices">{study.slices} slices</span>
+              </button>
+            ))}
           </div>
         </div>
 
