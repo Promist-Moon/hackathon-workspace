@@ -190,3 +190,35 @@ body {
   background: var(--accent-active);
 }
 
+/* Study selector items */
+.study-item {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 8px;
+  margin-bottom: 6px;
+  background: var(--bg-light);
+  color: var(--text);
+  border: 1px solid transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  text-align: left;
+  font-size: 12px;
+}
+.study-item:hover:not(:disabled) {
+  border-color: var(--accent-hover);
+}
+.study-item.active {
+  border-color: var(--accent-active);
+  background: rgba(233, 69, 96, 0.2);
+}
+.study-item:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.study-slices {
+  color: var(--text-dim);
+  font-size: 11px;
+}
