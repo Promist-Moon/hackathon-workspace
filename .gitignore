@@ -3,6 +3,7 @@ dist/
 .DS_Store
 *.local
 .env
+.venv/
 
 # Data: DICOM files are large — only the first 3 cases are included in the repo
 data/LIDC-IDRI-*/
