@@ -37,9 +37,17 @@ import {
   RectangleROITool,
   PlanarFreehandROITool,
   annotation,
+  segmentation as csSegmentation,
 } from '@cornerstonejs/tools'
-import { Enums as CoreEnums, metaData, utilities as coreUtils } from '@cornerstonejs/core'
+import {
+  Enums as CoreEnums,
+  cache,
+  imageLoader,
+  metaData,
+  utilities as coreUtils,
+} from '@cornerstonejs/core'
 import { Enums as ToolEnums } from '@cornerstonejs/tools'
+import dcmjs from 'dcmjs'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type NavTool  = 'WindowLevel' | 'Pan' | 'Zoom'
@@ -65,6 +73,7 @@ export default function App() {
   const [annotations, setAnnotations] = useState<AnnotationEntry[]>([])
   const [aiSegPath,   setAiSegPath]   = useState<string | null>(null)
   const [runningAI,   setRunningAI]   = useState(false)
+  const loadedAISegmentationIdsRef = useRef<string[]>([])
 
   // ── Initialise Cornerstone once the viewport div is mounted ────────────────
   useEffect(() => {
@@ -510,10 +519,195 @@ export default function App() {
   // See HACKATHON_TASKS.md § Task 4 for hints.
   //
   const handleShowAISeg = useCallback(async () => {
-    // TODO Task 4 — implement handleShowAISeg()
-    console.warn('Task 4 not yet implemented')
-    setStatus('Task 4: Show AI Segmentation — not yet implemented')
-  }, [activeStudy])
+    if (!ready) return
+    if (!activeStudy) {
+      setStatus('Select a study before showing AI segmentation')
+      return
+    }
+
+    const imageIds = getImageIds()
+    if (imageIds.length === 0) {
+      setStatus('Load CT slices first before showing segmentation')
+      return
+    }
+
+    try {
+      for (const segmentationId of loadedAISegmentationIdsRef.current) {
+        csSegmentation.removeSegmentationRepresentations(VIEWPORT_ID, { segmentationId })
+        csSegmentation.removeSegmentation(segmentationId)
+      }
+      loadedAISegmentationIdsRef.current = []
+
+      const fallbackSegPath = `/data/${activeStudy}/annotations/${activeStudy}_lung_nodules_seg.dcm`
+      const segUrl = aiSegPath ?? fallbackSegPath
+
+      setStatus(`Loading SEG from ${segUrl}…`)
+      const segRes = await fetch(segUrl)
+      if (!segRes.ok) {
+        throw new Error(`SEG not found (${segRes.status})`)
+      }
+      const segBuffer = await segRes.arrayBuffer()
+
+      const dicomData = (dcmjs as any).data.DicomMessage.readFile(segBuffer)
+      const segDataset = (dcmjs as any).data.DicomMetaDictionary.naturalizeDataset(dicomData.dict)
+      const refSeriesSeq = segDataset?.ReferencedSeriesSequence
+      const referencedSeriesInstanceUID = Array.isArray(refSeriesSeq)
+        ? refSeriesSeq[0]?.SeriesInstanceUID
+        : refSeriesSeq?.SeriesInstanceUID
+
+      setStatus('Preparing CT metadata for SEG alignment…')
+      await Promise.all(
+        imageIds.map(imageId => imageLoader.loadAndCacheImage(imageId).catch(() => null))
+      )
+
+      const metadataProvider = {
+        get: (type: string, imageId: string) => {
+          const existing = metaData.get(type, imageId) as any
+          if (existing) return existing
+
+          if (type === 'imagePlaneModule') {
+            const image = cache.getImage(imageId)
+            const idx = imageIds.indexOf(imageId)
+            return {
+              rowCosines: [1, 0, 0],
+              columnCosines: [0, 1, 0],
+              imageOrientationPatient: [1, 0, 0, 0, 1, 0],
+              imagePositionPatient: [0, 0, idx >= 0 ? idx : 0],
+              rows: image?.rows ?? 512,
+              columns: image?.columns ?? 512,
+              rowPixelSpacing: image?.rowPixelSpacing ?? 1,
+              columnPixelSpacing: image?.columnPixelSpacing ?? 1,
+              pixelSpacing: [image?.rowPixelSpacing ?? 1, image?.columnPixelSpacing ?? 1],
+            }
+          }
+
+          if (type === 'generalSeriesModule') {
+            return {
+              modality: 'CT',
+              seriesInstanceUID: referencedSeriesInstanceUID ?? '',
+            }
+          }
+
+          if (type === 'sopCommonModule') {
+            return {
+              sopInstanceUID: '',
+            }
+          }
+
+          return existing
+        },
+      }
+      const adapter = (dcmjs as any)?.adapters?.Cornerstone?.Segmentation
+      if (!adapter?.generateToolState) {
+        throw new Error('dcmjs Cornerstone Segmentation adapter not available')
+      }
+
+      const toolState = adapter.generateToolState(imageIds, segBuffer, metadataProvider)
+      const labelmapBufferArray = toolState?.labelmapBufferArray as ArrayBuffer[] | undefined
+      if (!labelmapBufferArray?.length) {
+        throw new Error('No labelmap data decoded from DICOM SEG')
+      }
+
+      const firstImage = cache.getImage(imageIds[0])
+      const rows = firstImage?.rows
+      const cols = firstImage?.columns
+      if (!rows || !cols) {
+        throw new Error('Unable to read CT dimensions from loaded images')
+      }
+      const sliceLength = rows * cols
+
+      const segMetadata = toolState?.segMetadata?.data ?? []
+      const colorFromSegment = (segmentIndex: number): number[] => {
+        const segment = segMetadata[segmentIndex]
+        const cielab = segment?.RecommendedDisplayCIELabValue
+        if (Array.isArray(cielab) && cielab.length >= 3) {
+          const rgb = (dcmjs as any)?.data?.Colors?.dicomlab2RGB?.(cielab)
+          if (Array.isArray(rgb) && rgb.length >= 3) {
+            return rgb.slice(0, 3).map((v: number) => Math.max(0, Math.min(255, Math.round(v))))
+          }
+        }
+        const hue = (segmentIndex * 137.508) % 360
+        const x = 1 - Math.abs(((hue / 60) % 2) - 1)
+        let r = 1, g = 1, b = 1
+        if (hue < 60) [r, g, b] = [1, x, 0]
+        else if (hue < 120) [r, g, b] = [x, 1, 0]
+        else if (hue < 180) [r, g, b] = [0, 1, x]
+        else if (hue < 240) [r, g, b] = [0, x, 1]
+        else if (hue < 300) [r, g, b] = [x, 0, 1]
+        else [r, g, b] = [1, 0, x]
+        return [Math.round(r * 255), Math.round(g * 255), Math.round(b * 255)]
+      }
+
+      const segmentEntries: SegmentEntry[] = []
+      const colorLUT: number[][] = [[0, 0, 0, 0]]
+      for (let i = 1; i < segMetadata.length; i++) {
+        const label = segMetadata[i]?.SegmentLabel || `Segment ${i}`
+        const color = colorFromSegment(i)
+        segmentEntries.push({ index: i, label, color })
+        colorLUT[i] = [color[0], color[1], color[2], 220]
+      }
+      const colorLUTIndex = csSegmentation.config.color.addColorLUT(colorLUT as any)
+
+      const representationInputs: Array<{ segmentationId: string; type: ToolEnums.SegmentationRepresentations; config: { colorLUTOrIndex: number } }> = []
+
+      labelmapBufferArray.forEach((labelmapBuffer, labelmapIndex) => {
+        const segmentationId = `ai-seg-${activeStudy}-${labelmapIndex}`
+        const derived = imageLoader.createAndCacheDerivedLabelmapImages(imageIds)
+        const derivedImageIds = derived.map(img => img.imageId)
+
+        const source = new Uint16Array(labelmapBuffer)
+        for (let i = 0; i < derivedImageIds.length; i++) {
+          const image = cache.getImage(derivedImageIds[i])
+          const pixels = image?.getPixelData() as Uint8Array | undefined
+          if (!pixels) continue
+          const offset = i * sliceLength
+          for (let p = 0; p < sliceLength; p++) {
+            pixels[p] = Math.min(255, source[offset + p] || 0)
+          }
+        }
+
+        const configSegments: Record<number, { label?: string }> = {}
+        for (const entry of segmentEntries) {
+          configSegments[entry.index] = { label: entry.label }
+        }
+
+        csSegmentation.addSegmentations([
+          {
+            segmentationId,
+            representation: {
+              type: ToolEnums.SegmentationRepresentations.Labelmap,
+              data: { imageIds: derivedImageIds },
+            },
+            config: {
+              label: `${activeStudy} AI SEG`,
+              segments: configSegments,
+            },
+          },
+        ])
+
+        representationInputs.push({
+          segmentationId,
+          type: ToolEnums.SegmentationRepresentations.Labelmap,
+          config: { colorLUTOrIndex: colorLUTIndex },
+        })
+        loadedAISegmentationIdsRef.current.push(segmentationId)
+      })
+
+      csSegmentation.addLabelmapRepresentationToViewportMap({
+        [VIEWPORT_ID]: representationInputs,
+      })
+
+      const re = getRenderingEngine()
+      const vp = re?.getViewport(VIEWPORT_ID) as any
+      vp?.render?.()
+
+      setSegments(segmentEntries)
+      setStatus(`Loaded AI SEG with ${segmentEntries.length} segment${segmentEntries.length === 1 ? '' : 's'}`)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      setStatus(`Failed to load AI SEG: ${msg}`)
+    }
+  }, [activeStudy, aiSegPath, ready])
 
   // ---------------------------------------------------------------------------
   // BONUS A — AI-Assisted Segmentation
