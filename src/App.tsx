@@ -49,6 +49,7 @@ type ActiveTool = NavTool | DrawTool
 interface SegmentEntry { index: number; label: string; color: number[] }
 interface AnnotationEntry { uid: string; type: string }
 interface Info { slice: string; total: string; wl: string }
+interface SegmentApiResponse { seg_path?: string; status?: string; detail?: string }
 
 // =============================================================================
 export default function App() {
@@ -62,6 +63,8 @@ export default function App() {
   const [info,        setInfo]        = useState<Info>({ slice: '--', total: '--', wl: '--' })
   const [segments,    setSegments]    = useState<SegmentEntry[]>([])
   const [annotations, setAnnotations] = useState<AnnotationEntry[]>([])
+  const [aiSegPath,   setAiSegPath]   = useState<string | null>(null)
+  const [runningAI,   setRunningAI]   = useState(false)
 
   // ── Initialise Cornerstone once the viewport div is mounted ────────────────
   useEffect(() => {
@@ -216,6 +219,7 @@ export default function App() {
       setActiveStudy(caseId)
       setAnnotations([])
       setSegments([])
+      setAiSegPath(null)
       setInfo(prev => ({ ...prev, slice: String(Math.floor(n / 2) + 1), total: String(n) }))
       setStatus(`Loaded ${caseId} (${n} slices)`)
     } catch (err) {
@@ -454,9 +458,46 @@ export default function App() {
   // See HACKATHON_TASKS.md § Task 3 for hints and available scripts.
   //
   const handleRunAI = useCallback(async () => {
-    // TODO Task 3 — implement handleRunAI()
-    console.warn('Task 3 not yet implemented')
-    setStatus('Task 3: Run AI Segmentation — not yet implemented')
+    if (!activeStudy) {
+      setStatus('Select a study before running AI')
+      return
+    }
+    if (getImageIds().length === 0) {
+      setStatus('Load CT slices first before running AI')
+      return
+    }
+
+    setRunningAI(true)
+    setStatus(`Running AI segmentation for ${activeStudy}…`)
+
+    try {
+      const res = await fetch('http://localhost:8000/segment', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ case_id: activeStudy }),
+      })
+
+      const data = await res.json() as SegmentApiResponse
+      if (!res.ok) {
+        throw new Error(data?.detail || `HTTP ${res.status}`)
+      }
+      if (!data.seg_path) {
+        throw new Error('No seg_path returned by server')
+      }
+
+      const browserPath = `/${data.seg_path.replace(/^\/+/, '')}`
+      setAiSegPath(browserPath)
+      setStatus(`AI complete for ${activeStudy}. SEG ready at ${browserPath}. Click "Show AI Seg".`)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      if (msg.includes('Failed to fetch')) {
+        setStatus('Failed to reach AI server at http://localhost:8000. Start scripts/segment_server.py first.')
+      } else {
+        setStatus(`AI segmentation failed: ${msg}`)
+      }
+    } finally {
+      setRunningAI(false)
+    }
   }, [activeStudy])
 
   // ---------------------------------------------------------------------------
@@ -571,8 +612,8 @@ export default function App() {
           <button disabled={!ready} onClick={handleLoadGT}>
             Load GT
           </button>
-          <button disabled={!ready} onClick={handleRunAI}>
-            Run AI
+          <button disabled={!ready || runningAI} onClick={handleRunAI}>
+            {runningAI ? 'Running AI…' : 'Run AI'}
           </button>
           <button disabled={!ready} onClick={handleShowAISeg}>
             Show AI Seg
